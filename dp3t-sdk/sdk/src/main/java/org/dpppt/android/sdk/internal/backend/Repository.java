@@ -31,7 +31,7 @@ public interface Repository {
 		Cache cache = new Cache(context.getCacheDir(), cacheSize);
 		okHttpBuilder.cache(cache);
 
-		okHttpBuilder.certificatePinner(CertificatePinning.getCertificatePinner());
+		//okHttpBuilder.certificatePinner(CertificatePinning.getCertificatePinner());
 
 		return okHttpBuilder;
 	}

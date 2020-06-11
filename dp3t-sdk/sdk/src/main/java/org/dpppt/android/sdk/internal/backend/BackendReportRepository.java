@@ -63,6 +63,18 @@ public class BackendReportRepository implements Repository {
 		});
 	}
 
+	public String addGaenExposeeSync(@NonNull GaenRequest exposeeRequest, ExposeeAuthMethod exposeeAuthMethod) throws IOException, StatusCodeException {
+		String authorizationHeader = exposeeAuthMethod instanceof ExposeeAuthMethodAuthorization
+									 ? ((ExposeeAuthMethodAuthorization) exposeeAuthMethod).getAuthorization()
+									 : null;
+		Response<Void> response = reportService.addGaenExposee(exposeeRequest, authorizationHeader).execute();
+		if (response.isSuccessful()) {
+			return response.headers().get("Authorization");
+		} else {
+			throw new StatusCodeException(response.raw());
+		}
+	}
+
 	public void addPendingGaenKey(GaenKey gaenKey, String token) throws IOException, StatusCodeException {
 		Response<Void> response = reportService.addPendingGaenKey(new GaenSecondDay(gaenKey), token).execute();
 		if (!response.isSuccessful()) {

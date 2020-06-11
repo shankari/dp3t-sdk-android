@@ -19,6 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.util.Consumer;
 
+import java.io.IOException;
 import java.security.PublicKey;
 import java.util.*;
 import java.util.concurrent.CancellationException;
@@ -184,7 +185,7 @@ public class DP3T {
 	public static void sync(Context context) {
 		checkInit();
 		try {
-			SyncWorker.doSync(context);
+			SyncWorker.doSync(context, System.currentTimeMillis());
 		} catch (Exception ignored) {
 			// has been handled upstream
 		}
@@ -284,52 +285,38 @@ public class DP3T {
 		pendingIAmInfectedRequest = null;
 	}
 
-	public static void sendFakeInfectedRequest(Context context, ExposeeAuthMethod exposeeAuthMethod) {
+	public static void sendFakeInfectedRequest(Context context, ExposeeAuthMethod exposeeAuthMethod, long currentTimeMillis)
+			throws IOException, StatusCodeException {
 		checkInit();
 
-		int delayedKeyDate = DateUtil.getCurrentRollingStartNumber();
+		int delayedKeyDate = DateUtil.getRollingStartNumberForDate(currentTimeMillis);
 		GaenRequest exposeeListRequest = new GaenRequest(new ArrayList<>(), delayedKeyDate);
 		exposeeListRequest.setFake(1);
 
 		AppConfigManager appConfigManager = AppConfigManager.getInstance(context);
 		boolean devHistory = appConfigManager.getDevHistory();
 		try {
-			appConfigManager.getBackendReportRepository(context)
-					.addGaenExposee(exposeeListRequest, exposeeAuthMethod,
-							new ResponseCallback<String>() {
-								@Override
-								public void onSuccess(String authToken) {
-									PendingKeyUploadStorage.PendingKey delayedKey = new PendingKeyUploadStorage.PendingKey(
-											delayedKeyDate,
-											authToken,
-											1);
-									PendingKeyUploadStorage.getInstance(context).addPendingKey(delayedKey);
-									Logger.d(TAG, "successfully sent fake request");
-									if (devHistory) {
-										HistoryDatabase historyDatabase = HistoryDatabase.getInstance(context);
-										historyDatabase.addEntry(new HistoryEntry(HistoryEntryType.FAKE_REQUEST, null, true,
-												System.currentTimeMillis()));
-									}
-								}
-
-								@Override
-								public void onError(Throwable throwable) {
-									Logger.d(TAG, "failed to send fake request");
-									if (devHistory) {
-										HistoryDatabase historyDatabase = HistoryDatabase.getInstance(context);
-										String status = throwable instanceof StatusCodeException ?
-														String.valueOf(((StatusCodeException) throwable).getCode()) : "NETW";
-										historyDatabase.addEntry(new HistoryEntry(HistoryEntryType.FAKE_REQUEST, status, false,
-												System.currentTimeMillis()));
-									}
-								}
-							});
-		} catch (IllegalStateException e) {
-			Logger.d(TAG, "failed to send fake request: " + e.getLocalizedMessage());
+			String authToken = appConfigManager.getBackendReportRepository(context)
+					.addGaenExposeeSync(exposeeListRequest, exposeeAuthMethod);
+			PendingKeyUploadStorage.PendingKey delayedKey = new PendingKeyUploadStorage.PendingKey(
+					delayedKeyDate,
+					authToken,
+					1);
+			PendingKeyUploadStorage.getInstance(context).addPendingKey(delayedKey);
+			Logger.d(TAG, "successfully sent fake request");
 			if (devHistory) {
 				HistoryDatabase historyDatabase = HistoryDatabase.getInstance(context);
-				historyDatabase.addEntry(new HistoryEntry(HistoryEntryType.FAKE_REQUEST, "SYST", false,
+				historyDatabase.addEntry(new HistoryEntry(HistoryEntryType.FAKE_REQUEST, null, true,
 						System.currentTimeMillis()));
+			}
+		} catch (IOException | StatusCodeException e) {
+			Logger.d(TAG, "failed to send fake request " + e.getMessage());
+			if (devHistory) {
+				HistoryDatabase historyDatabase = HistoryDatabase.getInstance(context);
+				String status = (e instanceof StatusCodeException) ? String.valueOf(((StatusCodeException) e).getCode()) : "NETW";
+				historyDatabase.addEntry(new HistoryEntry(HistoryEntryType.FAKE_REQUEST, status, false,
+						System.currentTimeMillis()));
+				throw e;
 			}
 		}
 	}

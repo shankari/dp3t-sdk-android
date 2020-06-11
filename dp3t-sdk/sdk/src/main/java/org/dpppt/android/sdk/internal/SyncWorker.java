@@ -56,6 +56,8 @@ public class SyncWorker extends Worker {
 	private static final String WORK_TAG = "org.dpppt.android.sdk.internal.SyncWorker";
 	private static final String KEYFILE_PREFIX = "keyfile_";
 
+	public static final String INPUT_SYNC_TIME_MILLIS = "INPUT_SYNC_TIME_MILLIS";
+
 	private static PublicKey bucketSignaturePublicKey;
 
 	public static void startSyncWorker(Context context) {
@@ -98,7 +100,8 @@ public class SyncWorker extends Worker {
 		}
 
 		try {
-			doSync(context);
+			long currentTimeMillis = getInputData().getLong(INPUT_SYNC_TIME_MILLIS, System.currentTimeMillis());
+			doSync(context, currentTimeMillis);
 		} catch (Exception e) {
 			Logger.d(TAG, "SyncWorker finished with exception " + e.getMessage());
 			return Result.retry();
@@ -107,13 +110,13 @@ public class SyncWorker extends Worker {
 		return Result.success();
 	}
 
-	public static synchronized void doSync(Context context) throws Exception {
+	public static synchronized void doSync(Context context, long syncTimeMillis) throws Exception {
 		GaenStateHelper.invalidateGaenAvailability(context);
 		GaenStateHelper.invalidateGaenEnabled(context);
 
 		try {
-			uploadPendingKeys(context);
-			doSyncInternal(context);
+			uploadPendingKeys(context, new DayDate(syncTimeMillis));
+			doSyncInternal(context, syncTimeMillis);
 			Logger.i(TAG, "synced");
 			AppConfigManager.getInstance(context).setLastSyncNetworkSuccess(true);
 			SyncErrorState.getInstance().setSyncError(null);
@@ -146,7 +149,7 @@ public class SyncWorker extends Worker {
 		}
 	}
 
-	private static void doSyncInternal(Context context) throws Exception {
+	private static void doSyncInternal(Context context, long syncTimeMillis) throws Exception {
 		AppConfigManager appConfigManager = AppConfigManager.getInstance(context);
 		ApplicationInfo appConfig = appConfigManager.getAppConfig();
 
@@ -158,7 +161,7 @@ public class SyncWorker extends Worker {
 				new BackendBucketRepository(context, appConfig.getBucketBaseUrl(), bucketSignaturePublicKey);
 		GoogleExposureClient googleExposureClient = GoogleExposureClient.getInstance(context);
 
-		DayDate lastDateToCheck = new DayDate();
+		DayDate lastDateToCheck = new DayDate(syncTimeMillis);
 		DayDate dateToLoad = lastDateToCheck.subtractDays(9);
 		int numInstantErrors = 0;
 		int numDelayedErrors = 0;
@@ -169,6 +172,7 @@ public class SyncWorker extends Worker {
 				// if there is no last sync call time recorded, set it to 5:59:59.999 on the current day, to make sure the first
 				// sync happens after 6am, otherwise we risk running into the 20 calls ratelimit.
 				Calendar cal = new GregorianCalendar();
+				cal.setTimeInMillis(syncTimeMillis);
 				cal.set(Calendar.HOUR_OF_DAY, 5);
 				cal.set(Calendar.MINUTE, 59);
 				cal.set(Calendar.SECOND, 59);
@@ -176,7 +180,7 @@ public class SyncWorker extends Worker {
 				lastSynCallTime = cal.getTimeInMillis();
 			}
 
-			if (lastSynCallTime < getLastDesiredSyncTime(dateToLoad)) {
+			if (lastSynCallTime < getLastDesiredSyncTime(syncTimeMillis)) {
 				try {
 					Response<ResponseBody> result =
 							backendBucketRepository.getGaenExposees(dateToLoad, lastLoadedTimes.get(dateToLoad));
@@ -246,7 +250,7 @@ public class SyncWorker extends Worker {
 		if (lastException != null) {
 			throw lastException;
 		} else {
-			appConfigManager.setLastSyncDate(System.currentTimeMillis());
+			appConfigManager.setLastSyncDate(syncTimeMillis);
 		}
 	}
 
@@ -260,12 +264,12 @@ public class SyncWorker extends Worker {
 		}
 	}
 
-	private static long getLastDesiredSyncTime(DayDate dateToLoad) {
+	private static long getLastDesiredSyncTime(long syncTimeMillis) {
 		if (BuildConfig.FLAVOR.equals("calibration")) {
-			long now = System.currentTimeMillis();
-			return now - (now % (5 * 60 * 1000L));
+			return syncTimeMillis - (syncTimeMillis % (5 * 60 * 1000L));
 		} else {
 			Calendar cal = new GregorianCalendar();
+			cal.setTimeInMillis(syncTimeMillis);
 			if (cal.get(Calendar.HOUR_OF_DAY) < 6) {
 				cal.add(Calendar.DATE, -1);
 				cal.set(Calendar.HOUR_OF_DAY, 18);
@@ -290,16 +294,16 @@ public class SyncWorker extends Worker {
 		}
 	}
 
-	private static void uploadPendingKeys(Context context) {
+	private static void uploadPendingKeys(Context context, DayDate dayDateSync) {
 		AppConfigManager appConfigManager = AppConfigManager.getInstance(context);
 		PendingKeyUploadStorage pendingKeyUploadStorage = PendingKeyUploadStorage.getInstance(context);
 		PendingKeyUploadStorage.PendingKey pendingKey = null;
 		try {
 			int numPendingUploaded = 0;
 			int numFakePendingUploaded = 0;
-			while (pendingKeyUploadStorage.peekRollingStartNumber() < DateUtil.getCurrentRollingStartNumber()) {
+			while (pendingKeyUploadStorage.peekRollingStartNumber() < DateUtil.getRollingStartNumberForDate(dayDateSync)) {
 				pendingKey = pendingKeyUploadStorage.popNextPendingKey();
-				if (pendingKey.getRollingStartNumber() < DateUtil.getRollingStartNumberForDate(new DayDate().subtractDays(1))) {
+				if (pendingKey.getRollingStartNumber() < DateUtil.getRollingStartNumberForDate(dayDateSync.subtractDays(1))) {
 					//ignore pendingKeys older than one day, upload token will be invalid
 					continue;
 				}
